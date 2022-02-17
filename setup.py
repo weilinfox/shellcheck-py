@@ -5,8 +5,10 @@ import io
 import os.path
 import platform
 import stat
+import subprocess
 import sys
 import tarfile
+import time
 import urllib.request
 import zipfile
 from distutils.command.build import build as orig_build
@@ -25,6 +27,10 @@ POSTFIX_SHA256 = {
     ('linux', 'aarch64'): (
         'linux.aarch64.tar.xz',
         '9f47bbff5624babfa712eb9d64ece14c6c46327122d0c54983f627ae3a30a4ac',
+    ),
+    ('linux', 'mips64'): (
+        'http://ftp.cn.debian.org/debian/pool/main/s/shellcheck/shellcheck_0.8.0-2~bpo11%2B1_mips64el.deb',
+        ''
     ),
     ('linux', 'x86_64'): (
         'linux.x86_64.tar.xz',
@@ -50,7 +56,7 @@ def get_download_url() -> Tuple[str, str]:
     url = (
         f'https://github.com/koalaman/shellcheck/releases/download/'
         f'v{SHELLCHECK_VERSION}/shellcheck-v{SHELLCHECK_VERSION}.{postfix}'
-    )
+    ) if len(sha256) > 0 else postfix
     return url, sha256
 
 
@@ -62,13 +68,27 @@ def download(url: str, sha256: str) -> bytes:
         data = resp.read()
 
     checksum = hashlib.sha256(data).hexdigest()
-    if checksum != sha256:
+    if len(sha256) > 0 and checksum != sha256:
         raise ValueError(f'sha256 mismatch, expected {sha256}, got {checksum}')
 
     return data
 
 
 def extract(url: str, data: bytes) -> bytes:
+    if url.endswith('.deb'):
+        tmp_dir = f'/tmp/shellcheck-py-{int(time.time())}'
+        file_name = os.path.basename(url)
+        file_path = os.path.join(tmp_dir, file_name)
+        bin = os.path.join(tmp_dir, 'usr/bin/shellcheck')
+        os.mkdir(tmp_dir, 0o1777)
+        with open(file_path, 'bw') as debf:
+            debf.write(data)
+        res = subprocess.run(['dpkg-deb', '-x', file_path, tmp_dir])
+        if res.returncode == 0 and os.path.exists(bin):
+            with open(bin, 'br') as binf:
+                data = binf.read()
+            subprocess.run(['rm', '-r', tmp_dir])
+            return data
     with io.BytesIO(data) as bio:
         if '.tar.' in url:
             with tarfile.open(fileobj=bio) as tarf:
